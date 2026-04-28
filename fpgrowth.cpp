@@ -12,6 +12,8 @@
 #include <cstdlib>
 #include <chrono>
 #include <functional>
+#include <omp.h>
+#include <iterator>
 
 using namespace std;
 
@@ -352,62 +354,150 @@ vector<Rule> solve(
     vector<vector<string>> raw_transactions;
 
     try {
-        ifstream file(datapath);
+        ifstream file(datapath, ios::binary);
 
         if (!file.is_open()) {
             throw runtime_error("Nie mozna otworzyc pliku.");
         }
 
-        string line;
-        getline(file, line);
+        // 1. Wczytanie całego pliku do jednego bufora
+        auto startReadingCSV = std::chrono::high_resolution_clock::now();
 
-        unordered_map<int, size_t> transaction_index;
-        transaction_index.reserve(50000);
-        raw_transactions.reserve(50000);
-        // Pomiar czasu wczytywania danych
-        {
+        file.seekg(0, ios::end);
+        size_t file_size = static_cast<size_t>(file.tellg());
+        file.seekg(0, ios::beg);
+
+        string buffer(file_size, '\0');
+        file.read(buffer.data(), file_size);
+
+        auto endReadingCSV = std::chrono::high_resolution_clock::now();
+        calculateTime(startReadingCSV, endReadingCSV, "Czas wczytywania danych");
+
+
+        // 2. Pominięcie nagłówka
+        size_t data_start = buffer.find('\n');
+        if (data_start == string::npos) {
+            raw_transactions.clear();
+            return {};
+        }
+        data_start++;
+
+
+        // 3. Równoległe parsowanie bufora
         auto start = std::chrono::high_resolution_clock::now();
-        while (getline(file, line)) {
-            
-            // wersja szybsza z walidacją
-            size_t comma1 = line.find(',');
-            if (comma1 == string::npos) continue;
 
-            size_t comma2 = line.find(',', comma1 + 1);
-            if (comma2 == string::npos) continue;
+        int thread_count = omp_get_max_threads();
+        vector<unordered_map<int, vector<string>>> local_maps(thread_count);
 
-            int invoice = 0;
-            bool valid_invoice = comma1 > 0;
+        #pragma omp parallel
+        {
+            int tid = omp_get_thread_num();
+            auto& local_map = local_maps[tid];
+            local_map.reserve(10000);
 
-            for (size_t i = 0; i < comma1; ++i) {
-                unsigned char c = static_cast<unsigned char>(line[i]);
-                if (!isdigit(c)) {
-                    valid_invoice = false;
-                    break;
+            size_t chunk_size = (buffer.size() - data_start) / thread_count;
+
+            size_t begin = data_start + tid * chunk_size;
+            size_t end = (tid == thread_count - 1)
+                ? buffer.size()
+                : data_start + (tid + 1) * chunk_size;
+
+            // Przesuń begin do początku następnej linii
+            if (tid != 0) {
+                while (begin < buffer.size() && buffer[begin - 1] != '\n') {
+                    begin++;
+                }
+            }
+
+            // Przesuń end do końca aktualnej linii
+            if (tid != thread_count - 1) {
+                while (end < buffer.size() && buffer[end] != '\n') {
+                    end++;
+                }
+            }
+
+            size_t pos = begin;
+
+            while (pos < end) {
+                size_t line_end = buffer.find('\n', pos);
+                if (line_end == string::npos || line_end > end) {
+                    line_end = end;
                 }
 
-                invoice = invoice * 10 + (line[i] - '0');
+                size_t comma1 = buffer.find(',', pos);
+                if (comma1 == string::npos || comma1 >= line_end) {
+                    pos = line_end + 1;
+                    continue;
+                }
+
+                size_t comma2 = buffer.find(',', comma1 + 1);
+                if (comma2 == string::npos || comma2 >= line_end) {
+                    pos = line_end + 1;
+                    continue;
+                }
+
+                int invoice = 0;
+                bool valid_invoice = comma1 > pos;
+
+                for (size_t i = pos; i < comma1; ++i) {
+                    unsigned char c = static_cast<unsigned char>(buffer[i]);
+
+                    if (!isdigit(c)) {
+                        valid_invoice = false;
+                        break;
+                    }
+
+                    invoice = invoice * 10 + (buffer[i] - '0');
+                }
+
+                if (!valid_invoice) {
+                    pos = line_end + 1;
+                    continue;
+                }
+
+                size_t stock_start = comma1 + 1;
+                size_t stock_len = comma2 - stock_start;
+
+                if (stock_len == 0) {
+                    pos = line_end + 1;
+                    continue;
+                }
+
+                string stock_code = buffer.substr(stock_start, stock_len);
+                local_map[invoice].push_back(std::move(stock_code));
+
+                pos = line_end + 1;
             }
-
-            if (!valid_invoice) continue;
-
-            string stock_code = line.substr(comma1 + 1, comma2 - comma1 - 1);
-            if (stock_code.empty()) continue;
-
-            auto found = transaction_index.find(invoice);
-            if (found == transaction_index.end()) {
-                size_t index = raw_transactions.size();
-                found = transaction_index.emplace(invoice, index).first;
-                raw_transactions.emplace_back();
-            }
-
-            raw_transactions[found->second].push_back(std::move(stock_code));
-
         }
+
+
+        // 4. Scalanie wyników
+        unordered_map<int, vector<string>> global_map;
+        global_map.reserve(50000);
+
+        for (auto& local_map : local_maps) {
+            for (auto& [invoice, items] : local_map) {
+                auto& dest = global_map[invoice];
+
+                dest.insert(
+                    dest.end(),
+                    make_move_iterator(items.begin()),
+                    make_move_iterator(items.end())
+                );
+            }
+        }
+
+
+        // 5. Przeniesienie do raw_transactions
+        raw_transactions.clear();
+        raw_transactions.reserve(global_map.size());
+
+        for (auto& [invoice, items] : global_map) {
+            raw_transactions.push_back(std::move(items));
+        }
+
         auto end = std::chrono::high_resolution_clock::now();
-        
-        calculateTime(start, end, "Czas wczytywania danych");
-        }   
+        calculateTime(start, end, "Czas przetwarzania danych i budowania struktury transakcji");  
 
     } catch (...) {
         raw_transactions.clear();

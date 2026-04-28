@@ -56,6 +56,7 @@ def _compile_if_needed() -> None:
             "/O2",
             "/DNDEBUG",
             "/EHsc",
+            "/openmp",
             str(CPP_PATH),
             f"/Fe:{EXE_PATH}",
         ]
@@ -65,6 +66,7 @@ def _compile_if_needed() -> None:
             "-std=c++17",
             "-O3",
             "-DNDEBUG",
+            "-fopenmp",
             str(CPP_PATH),
             "-o",
             str(EXE_PATH),
