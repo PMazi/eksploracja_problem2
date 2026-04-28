@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <chrono>
+#include <functional>
 
 using namespace std;
 
@@ -99,117 +100,220 @@ void insert_tree(const vector<string>& items, int index, FPNode* node, HeaderTab
     insert_tree(items, index + 1, node->children[current_item], header_table);
 }
 
-void mine_tree(
-    HeaderTable& header_table,
-    double min_supp_count,
-    Itemset prefix,
-    FrequentItemsets& frequent_itemsets
-) {
-    vector<pair<string, HeaderEntry>> sorted_items;
+namespace frequent_itemsets_library {
 
-    for (const auto& entry : header_table) {
-        sorted_items.push_back(entry);
-    }
+    void mine_tree(
+        HeaderTable& header_table,
+        double min_supp_count,
+        Itemset prefix,
+        FrequentItemsets& frequent_itemsets
+    ) {
+        vector<pair<string, HeaderEntry>> sorted_items;
 
-    sort(sorted_items.begin(), sorted_items.end(),
-         [](const auto& a, const auto& b) {
-             return a.second.count < b.second.count;
-         });
-
-    for (const auto& entry : sorted_items) {
-        string item = entry.first;
-
-        Itemset new_frequent_set = prefix;
-        new_frequent_set.insert(item);
-
-        frequent_itemsets[new_frequent_set] = header_table[item].count;
-
-        vector<pair<vector<string>, int>> cond_patterns;
-
-        FPNode* node = header_table[item].first;
-
-        while (node != nullptr) {
-            vector<string> prefix_path;
-
-            FPNode* parent = node->parent;
-            while (parent != nullptr && !parent->item.empty()) {
-                prefix_path.push_back(parent->item);
-                parent = parent->parent;
-            }
-
-            if (!prefix_path.empty()) {
-                cond_patterns.push_back({prefix_path, node->count});
-            }
-
-            node = node->next_link;
+        for (const auto& entry : header_table) {
+            sorted_items.push_back(entry);
         }
 
-        unordered_map<string, int> cond_header_counts;
+        sort(sorted_items.begin(), sorted_items.end(),
+            [](const auto& a, const auto& b) {
+                return a.second.count < b.second.count;
+            });
 
-        for (const auto& pattern : cond_patterns) {
-            const vector<string>& path = pattern.first;
-            int count = pattern.second;
+        for (const auto& entry : sorted_items) {
+            string item = entry.first;
 
-            for (const string& p_item : path) {
-                cond_header_counts[p_item] += count;
+            Itemset new_frequent_set = prefix;
+            new_frequent_set.insert(item);
+
+            frequent_itemsets[new_frequent_set] = header_table[item].count;
+
+            vector<pair<vector<string>, int>> cond_patterns;
+
+            FPNode* node = header_table[item].first;
+
+            while (node != nullptr) {
+                vector<string> prefix_path;
+
+                FPNode* parent = node->parent;
+                while (parent != nullptr && !parent->item.empty()) {
+                    prefix_path.push_back(parent->item);
+                    parent = parent->parent;
+                }
+
+                if (!prefix_path.empty()) {
+                    cond_patterns.push_back({prefix_path, node->count});
+                }
+
+                node = node->next_link;
             }
-        }
 
-        HeaderTable cond_header;
-
-        for (const auto& ch : cond_header_counts) {
-            if (ch.second >= min_supp_count) {
-                cond_header[ch.first] = {ch.second, nullptr};
-            }
-        }
-
-        if (!cond_header.empty()) {
-            FPNode* cond_root = new FPNode("", 0, nullptr);
+            unordered_map<string, int> cond_header_counts;
 
             for (const auto& pattern : cond_patterns) {
                 const vector<string>& path = pattern.first;
                 int count = pattern.second;
 
-                vector<string> filtered_path;
-
                 for (const string& p_item : path) {
-                    if (cond_header.find(p_item) != cond_header.end()) {
-                        filtered_path.push_back(p_item);
-                    }
-                }
-
-                if (!filtered_path.empty()) {
-                    FPNode* curr = cond_root;
-
-                    for (auto it = filtered_path.rbegin(); it != filtered_path.rend(); ++it) {
-                        const string& p_item = *it;
-
-                        if (curr->children.find(p_item) != curr->children.end()) {
-                            curr->children[p_item]->count += count;
-                        } else {
-                            FPNode* new_node = new FPNode(p_item, count, curr);
-                            curr->children[p_item] = new_node;
-
-                            if (cond_header[p_item].first == nullptr) {
-                                cond_header[p_item].first = new_node;
-                            } else {
-                                FPNode* tmp = cond_header[p_item].first;
-                                while (tmp->next_link != nullptr) {
-                                    tmp = tmp->next_link;
-                                }
-                                tmp->next_link = new_node;
-                            }
-                        }
-
-                        curr = curr->children[p_item];
-                    }
+                    cond_header_counts[p_item] += count;
                 }
             }
 
-            mine_tree(cond_header, min_supp_count, new_frequent_set, frequent_itemsets);
+            HeaderTable cond_header;
+
+            for (const auto& ch : cond_header_counts) {
+                if (ch.second >= min_supp_count) {
+                    cond_header[ch.first] = {ch.second, nullptr};
+                }
+            }
+
+            if (!cond_header.empty()) {
+                FPNode* cond_root = new FPNode("", 0, nullptr);
+
+                for (const auto& pattern : cond_patterns) {
+                    const vector<string>& path = pattern.first;
+                    int count = pattern.second;
+
+                    vector<string> filtered_path;
+
+                    for (const string& p_item : path) {
+                        if (cond_header.find(p_item) != cond_header.end()) {
+                            filtered_path.push_back(p_item);
+                        }
+                    }
+
+                    if (!filtered_path.empty()) {
+                        FPNode* curr = cond_root;
+
+                        for (auto it = filtered_path.rbegin(); it != filtered_path.rend(); ++it) {
+                            const string& p_item = *it;
+
+                            if (curr->children.find(p_item) != curr->children.end()) {
+                                curr->children[p_item]->count += count;
+                            } else {
+                                FPNode* new_node = new FPNode(p_item, count, curr);
+                                curr->children[p_item] = new_node;
+
+                                if (cond_header[p_item].first == nullptr) {
+                                    cond_header[p_item].first = new_node;
+                                } else {
+                                    FPNode* tmp = cond_header[p_item].first;
+                                    while (tmp->next_link != nullptr) {
+                                        tmp = tmp->next_link;
+                                    }
+                                    tmp->next_link = new_node;
+                                }
+                            }
+
+                            curr = curr->children[p_item];
+                        }
+                    }
+                }
+
+                mine_tree(cond_header, min_supp_count, new_frequent_set, frequent_itemsets);
+            }
         }
     }
-}
+
+    FrequentItemsets generate(HeaderTable& header_table, double min_supp_count) {
+        FrequentItemsets frequent_itemsets;
+        Itemset empty_prefix;
+
+        mine_tree(header_table, min_supp_count, empty_prefix, frequent_itemsets);
+
+        return frequent_itemsets;
+    }
+
+    FrequentItemsets generate(
+        const vector<vector<string>>& transactions,
+        double min_supp_count
+    ) {
+        using TidList = vector<int>;
+
+        unordered_map<string, TidList> vertical_index;
+        vertical_index.reserve(4096);
+
+        for (int tid = 0; tid < static_cast<int>(transactions.size()); ++tid) {
+            unordered_set<string> seen;
+            seen.reserve(transactions[tid].size());
+
+            for (const string& item : transactions[tid]) {
+                if (seen.insert(item).second) {
+                    vertical_index[item].push_back(tid);
+                }
+            }
+        }
+
+        vector<pair<string, TidList>> items;
+        items.reserve(vertical_index.size());
+
+        for (auto& entry : vertical_index) {
+            if (static_cast<double>(entry.second.size()) >= min_supp_count) {
+                items.push_back({entry.first, std::move(entry.second)});
+            }
+        }
+
+        sort(items.begin(), items.end(),
+            [](const auto& a, const auto& b) {
+                if (a.second.size() != b.second.size()) {
+                    return a.second.size() < b.second.size();
+                }
+                return a.first < b.first;
+            });
+
+        FrequentItemsets frequent_itemsets;
+
+        auto intersect_tids = [](const TidList& left, const TidList& right) {
+            TidList result;
+            result.reserve(min(left.size(), right.size()));
+
+            size_t i = 0;
+            size_t j = 0;
+
+            while (i < left.size() && j < right.size()) {
+                if (left[i] == right[j]) {
+                    result.push_back(left[i]);
+                    ++i;
+                    ++j;
+                } else if (left[i] < right[j]) {
+                    ++i;
+                } else {
+                    ++j;
+                }
+            }
+
+            return result;
+        };
+
+        function<void(Itemset, vector<pair<string, TidList>>)> extend =
+            [&](Itemset prefix, vector<pair<string, TidList>> suffix) {
+                for (size_t i = 0; i < suffix.size(); ++i) {
+                    Itemset next_prefix = prefix;
+                    next_prefix.insert(suffix[i].first);
+
+                    frequent_itemsets[next_prefix] = static_cast<int>(suffix[i].second.size());
+
+                    vector<pair<string, TidList>> next_suffix;
+
+                    for (size_t j = i + 1; j < suffix.size(); ++j) {
+                        TidList intersection = intersect_tids(suffix[i].second, suffix[j].second);
+
+                        if (static_cast<double>(intersection.size()) >= min_supp_count) {
+                            next_suffix.push_back({suffix[j].first, std::move(intersection)});
+                        }
+                    }
+
+                    if (!next_suffix.empty()) {
+                        extend(next_prefix, std::move(next_suffix));
+                    }
+                }
+            };
+
+        extend(Itemset{}, std::move(items));
+
+        return frequent_itemsets;
+    }
+
+}  // namespace frequent_itemsets_library
 
 void generate_combinations_recursive(
     const vector<string>& items,
@@ -257,54 +361,53 @@ vector<Rule> solve(
         string line;
         getline(file, line);
 
-        unordered_map<string, vector<string>> trans_dict;
+        unordered_map<int, size_t> transaction_index;
+        transaction_index.reserve(50000);
+        raw_transactions.reserve(50000);
         // Pomiar czasu wczytywania danych
         {
         auto start = std::chrono::high_resolution_clock::now();
         while (getline(file, line)) {
-            // wersja wolna
-            // vector<string> parts = split(line, ',');
-
-            // if (parts.size() >= 2 && is_number(parts[0])) {
-            //     trans_dict[parts[0]].push_back(parts[1]);
-            // }
-
             
             // wersja szybsza z walidacją
             size_t comma1 = line.find(',');
             if (comma1 == string::npos) continue;
 
             size_t comma2 = line.find(',', comma1 + 1);
+            if (comma2 == string::npos) continue;
 
-            string col1 = line.substr(0, comma1);
+            int invoice = 0;
+            bool valid_invoice = comma1 > 0;
 
-            string col2;
-            if (comma2 == string::npos) {
-                col2 = line.substr(comma1 + 1);
-            } else {
-                col2 = line.substr(comma1 + 1, comma2 - comma1 - 1);
+            for (size_t i = 0; i < comma1; ++i) {
+                unsigned char c = static_cast<unsigned char>(line[i]);
+                if (!isdigit(c)) {
+                    valid_invoice = false;
+                    break;
+                }
+
+                invoice = invoice * 10 + (line[i] - '0');
             }
 
-            if (is_number(col1)) {
-                trans_dict[col1].push_back(col2);
+            if (!valid_invoice) continue;
+
+            string stock_code = line.substr(comma1 + 1, comma2 - comma1 - 1);
+            if (stock_code.empty()) continue;
+
+            auto found = transaction_index.find(invoice);
+            if (found == transaction_index.end()) {
+                size_t index = raw_transactions.size();
+                found = transaction_index.emplace(invoice, index).first;
+                raw_transactions.emplace_back();
             }
 
+            raw_transactions[found->second].push_back(std::move(stock_code));
 
-            // wersja szybsza bez walidacji
-            // size_t comma1 = line.find(',');
-            // size_t comma2 = line.find(',', comma1 + 1);
-            // string col1 = line.substr(0, comma1);
-            // string col2 = line.substr(comma1 + 1, comma2 - comma1 - 1);
-            // trans_dict[col1].push_back(col2);
         }
         auto end = std::chrono::high_resolution_clock::now();
         
         calculateTime(start, end, "Czas wczytywania danych");
         }   
-
-        for (const auto& entry : trans_dict) {
-            raw_transactions.push_back(entry.second);
-        }
 
     } catch (...) {
         raw_transactions.clear();
@@ -314,7 +417,7 @@ vector<Rule> solve(
     double min_supp_count = min_support * n_trans;
 
     
-    // Pomiar czasu liczenia wsparcia pojedynczych elementów
+    // Pomiar czasu liczenia wsparcia pojedynczych elementow
     unordered_map<string, int> item_counts;
     {
     auto start = std::chrono::high_resolution_clock::now();
@@ -324,10 +427,10 @@ vector<Rule> solve(
         }
     }
     auto end = std::chrono::high_resolution_clock::now();
-    calculateTime(start, end, "Czas liczenia wsparcia pojedynczych elementów");
+    calculateTime(start, end, "Czas liczenia wsparcia pojedynczych elementow");
     }
     
-    // Pomiar czasu filtrowania elementów niespełniających wsparcia
+    // Pomiar czasu filtrowania elementow niespelniajacych wsparcia
     unordered_map<string, int> frequent_items;
     {
     auto start = std::chrono::high_resolution_clock::now();
@@ -337,7 +440,7 @@ vector<Rule> solve(
         }
     }
     auto end = std::chrono::high_resolution_clock::now();
-    calculateTime(start, end, "Czas filtrowania elementów niespełniających wsparcia");
+    calculateTime(start, end, "Czas filtrowania elementow niespelniajacych wsparcia");
     }
 
     vector<string> sorted_items;
@@ -346,7 +449,7 @@ vector<Rule> solve(
         sorted_items.push_back(entry.first);
     }
 
-    // Pomiar czasu sortowania elementów według wsparcia
+    // Pomiar czasu sortowania elementow wg wsparcia
     {
     auto start = std::chrono::high_resolution_clock::now();
     sort(sorted_items.begin(), sorted_items.end(),
@@ -354,65 +457,16 @@ vector<Rule> solve(
              return frequent_items[a] > frequent_items[b];
          });
     auto end = std::chrono::high_resolution_clock::now();
-    calculateTime(start, end, "Czas sortowania elementów według wsparcia");
-    }
-
-    FPNode* root = new FPNode("", 0, nullptr);
-
-    HeaderTable header_table;
-
-    for (const auto& entry : frequent_items) {
-        header_table[entry.first] = {entry.second, nullptr};
-    }
-
-    // Pomiar czasu wstawiania transakcji do drzewa FP
-    {
-    auto start = std::chrono::high_resolution_clock::now();
-    
-    std::unordered_map<std::string, int> item_order;
-    item_order.reserve(sorted_items.size());
-
-    for (int i = 0; i < static_cast<int>(sorted_items.size()); ++i) {
-        item_order[sorted_items[i]] = i;
-    }
-
-    for (const auto& trans : raw_transactions) {
-        vector<string> filtered_trans;
-        filtered_trans.reserve(trans.size());
-
-        std::unordered_set<std::string> seen;
-        seen.reserve(trans.size());
-
-        for (const auto& item : trans) {
-            if (item_order.find(item) != item_order.end()) {
-                if (seen.insert(item).second) {
-                    filtered_trans.push_back(item);
-                }
-            }
-        }
-
-        sort(filtered_trans.begin(), filtered_trans.end(),
-            [&item_order](const string& a, const string& b) {
-                return item_order.at(a) < item_order.at(b);
-            });
-
-        if (!filtered_trans.empty()) {
-            insert_tree(filtered_trans, 0, root, header_table);
-        }
-    }
-
-    auto end = std::chrono::high_resolution_clock::now();
-    calculateTime(start, end, "Czas wstawiania transakcji do drzewa FP");
+    calculateTime(start, end, "Czas sortowania elementow wedlug wsparcia");
     }
 
     FrequentItemsets frequent_itemsets;
-    Itemset empty_prefix;
-    // Pomiar czasu wydobywania częstych itemsetów z drzewa FP
+    // Pomiar czasu generowania częstych itemsetów przez moduł biblioteczny
     {
     auto start = std::chrono::high_resolution_clock::now();
-    mine_tree(header_table, min_supp_count, empty_prefix, frequent_itemsets);
+    frequent_itemsets = frequent_itemsets_library::generate(raw_transactions, min_supp_count);
     auto end = std::chrono::high_resolution_clock::now();
-    calculateTime(start, end, "Czas wydobywania częstych itemsetów z drzewa FP");
+    calculateTime(start, end, "Czas generowania czestych itemsetow");
     }
 
     vector<Rule> rules;
@@ -465,7 +519,7 @@ vector<Rule> solve(
         }
     }
     auto end = std::chrono::high_resolution_clock::now();
-    calculateTime(start, end, "Czas generowania reguł asocjacyjnych z częstych itemsetów");
+    calculateTime(start, end, "Czas generowania regul asocjacyjnych z czestych itemsetow");
     }
 
     if (verbose) {
