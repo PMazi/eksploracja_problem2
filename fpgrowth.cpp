@@ -14,6 +14,8 @@
 #include <functional>
 #include <omp.h>
 #include <iterator>
+#include <functional>
+#include <mutex>
 
 using namespace std;
 
@@ -226,23 +228,49 @@ namespace frequent_itemsets_library {
     }
 
     FrequentItemsets generate(
-        const vector<vector<string>>& transactions,
-        double min_supp_count
+    const vector<vector<string>>& transactions,
+    double min_supp_count
     ) {
         using TidList = vector<int>;
+
+        int thread_count = omp_get_max_threads();
+        vector<unordered_map<string, TidList>> local_indexes(thread_count);
+
+        #pragma omp parallel
+        {
+            int thread_id = omp_get_thread_num();
+            auto& local_index = local_indexes[thread_id];
+
+            #pragma omp for schedule(static)
+            for (int tid = 0; tid < static_cast<int>(transactions.size()); ++tid) {
+                unordered_set<string> seen;
+                seen.reserve(transactions[tid].size());
+
+                for (const string& item : transactions[tid]) {
+                    if (seen.insert(item).second) {
+                        local_index[item].push_back(tid);
+                    }
+                }
+            }
+        }
 
         unordered_map<string, TidList> vertical_index;
         vertical_index.reserve(4096);
 
-        for (int tid = 0; tid < static_cast<int>(transactions.size()); ++tid) {
-            unordered_set<string> seen;
-            seen.reserve(transactions[tid].size());
+        for (auto& local_index : local_indexes) {
+            for (auto& [item, tids] : local_index) {
+                auto& dest = vertical_index[item];
 
-            for (const string& item : transactions[tid]) {
-                if (seen.insert(item).second) {
-                    vertical_index[item].push_back(tid);
-                }
+                dest.insert(
+                    dest.end(),
+                    tids.begin(),
+                    tids.end()
+                );
             }
+        }
+
+        for (auto& [item, tids] : vertical_index) {
+            sort(tids.begin(), tids.end());
         }
 
         vector<pair<string, TidList>> items;
@@ -261,8 +289,6 @@ namespace frequent_itemsets_library {
                 }
                 return a.first < b.first;
             });
-
-        FrequentItemsets frequent_itemsets;
 
         auto intersect_tids = [](const TidList& left, const TidList& right) {
             TidList result;
@@ -286,31 +312,79 @@ namespace frequent_itemsets_library {
             return result;
         };
 
-        function<void(Itemset, vector<pair<string, TidList>>)> extend =
-            [&](Itemset prefix, vector<pair<string, TidList>> suffix) {
-                for (size_t i = 0; i < suffix.size(); ++i) {
-                    Itemset next_prefix = prefix;
-                    next_prefix.insert(suffix[i].first);
+        FrequentItemsets frequent_itemsets;
 
-                    frequent_itemsets[next_prefix] = static_cast<int>(suffix[i].second.size());
+        int n = static_cast<int>(items.size());
 
-                    vector<pair<string, TidList>> next_suffix;
+        vector<FrequentItemsets> local_results(omp_get_max_threads());
 
-                    for (size_t j = i + 1; j < suffix.size(); ++j) {
-                        TidList intersection = intersect_tids(suffix[i].second, suffix[j].second);
+        #pragma omp parallel
+        {
+            int tid = omp_get_thread_num();
+            FrequentItemsets& local_itemsets = local_results[tid];
 
-                        if (static_cast<double>(intersection.size()) >= min_supp_count) {
-                            next_suffix.push_back({suffix[j].first, std::move(intersection)});
+            function<void(Itemset, vector<pair<string, TidList>>)> extend =
+                [&](Itemset prefix, vector<pair<string, TidList>> suffix) {
+                    for (size_t i = 0; i < suffix.size(); ++i) {
+                        Itemset next_prefix = prefix;
+                        next_prefix.insert(suffix[i].first);
+
+                        local_itemsets[next_prefix] =
+                            static_cast<int>(suffix[i].second.size());
+
+                        vector<pair<string, TidList>> next_suffix;
+
+                        for (size_t j = i + 1; j < suffix.size(); ++j) {
+                            TidList intersection =
+                                intersect_tids(suffix[i].second, suffix[j].second);
+
+                            if (static_cast<double>(intersection.size()) >= min_supp_count) {
+                                next_suffix.push_back({
+                                    suffix[j].first,
+                                    std::move(intersection)
+                                });
+                            }
+                        }
+
+                        if (!next_suffix.empty()) {
+                            extend(next_prefix, std::move(next_suffix));
                         }
                     }
+                };
 
-                    if (!next_suffix.empty()) {
-                        extend(next_prefix, std::move(next_suffix));
+            #pragma omp for schedule(dynamic)
+            for (int i = 0; i < n; ++i) {
+                Itemset prefix;
+                prefix.insert(items[i].first);
+
+                local_itemsets[prefix] =
+                    static_cast<int>(items[i].second.size());
+
+                vector<pair<string, TidList>> suffix;
+
+                for (int j = i + 1; j < n; ++j) {
+                    TidList intersection =
+                        intersect_tids(items[i].second, items[j].second);
+
+                    if (static_cast<double>(intersection.size()) >= min_supp_count) {
+                        suffix.push_back({
+                            items[j].first,
+                            std::move(intersection)
+                        });
                     }
                 }
-            };
 
-        extend(Itemset{}, std::move(items));
+                if (!suffix.empty()) {
+                    extend(prefix, std::move(suffix));
+                }
+            }
+        }
+
+        for (auto& local : local_results) {
+            for (auto& entry : local) {
+                frequent_itemsets.insert(std::move(entry));
+            }
+        }
 
         return frequent_itemsets;
     }
@@ -373,17 +447,13 @@ vector<Rule> solve(
         auto endReadingCSV = std::chrono::high_resolution_clock::now();
         calculateTime(startReadingCSV, endReadingCSV, "Czas wczytywania danych");
 
-
-        // 2. Pominięcie nagłówka
         size_t data_start = buffer.find('\n');
         if (data_start == string::npos) {
             raw_transactions.clear();
             return {};
         }
         data_start++;
-
-
-        // 3. Równoległe parsowanie bufora
+        // Podział bufora na linie i przetwarzanie ich równolegle
         auto start = std::chrono::high_resolution_clock::now();
 
         int thread_count = omp_get_max_threads();
@@ -402,14 +472,12 @@ vector<Rule> solve(
                 ? buffer.size()
                 : data_start + (tid + 1) * chunk_size;
 
-            // Przesuń begin do początku następnej linii
             if (tid != 0) {
                 while (begin < buffer.size() && buffer[begin - 1] != '\n') {
                     begin++;
                 }
             }
 
-            // Przesuń end do końca aktualnej linii
             if (tid != thread_count - 1) {
                 while (end < buffer.size() && buffer[end] != '\n') {
                     end++;
@@ -470,8 +538,6 @@ vector<Rule> solve(
             }
         }
 
-
-        // 4. Scalanie wyników
         unordered_map<int, vector<string>> global_map;
         global_map.reserve(50000);
 
@@ -487,12 +553,13 @@ vector<Rule> solve(
             }
         }
 
-
-        // 5. Przeniesienie do raw_transactions
         raw_transactions.clear();
         raw_transactions.reserve(global_map.size());
 
         for (auto& [invoice, items] : global_map) {
+            sort(items.begin(), items.end());
+            items.erase(unique(items.begin(), items.end()), items.end());
+
             raw_transactions.push_back(std::move(items));
         }
 
@@ -556,7 +623,7 @@ vector<Rule> solve(
     auto start = std::chrono::high_resolution_clock::now();
     frequent_itemsets = frequent_itemsets_library::generate(raw_transactions, min_supp_count);
     auto end = std::chrono::high_resolution_clock::now();
-    calculateTime(start, end, "Czas generowania czestych itemsetow");
+    calculateTime(start, end, "Czas generowania czestych itemsetow przez modul biblioteczny");
     }
 
     vector<Rule> rules;
