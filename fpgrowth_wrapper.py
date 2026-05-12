@@ -121,12 +121,12 @@ def solve(min_support: float, min_confidence: float, verbose: bool = False) -> l
             }
         )
 
-    # if not verbose:
-    #     print(f"Wygenerowano {len(rules)} regul.")
+    if not verbose:
+        print(f"Wygenerowano {len(rules)} regul.")
 
-    # if not verbose:
-    #     print(f'Wygenerowano {len(rules)} reguł.')
-    #     for rule in rules:
-    #         print(f'{rule['A']}=>{rule['B']} Support: {rule['supp']}, Confidence: {rule['conf']}')
+    if not verbose:
+        print(f'Wygenerowano {len(rules)} reguł.')
+        for rule in rules:
+            print(f'{rule['A']}=>{rule['B']} Support: {rule['supp']}, Confidence: {rule['conf']}')
     
     return rules

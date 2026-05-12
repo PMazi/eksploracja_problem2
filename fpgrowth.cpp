@@ -435,7 +435,7 @@ vector<Rule> solve(
         }
 
         // 1. Wczytanie całego pliku do jednego bufora
-        auto startReadingCSV = std::chrono::high_resolution_clock::now();
+        // auto startReadingCSV = std::chrono::high_resolution_clock::now();
 
         file.seekg(0, ios::end);
         size_t file_size = static_cast<size_t>(file.tellg());
@@ -444,8 +444,8 @@ vector<Rule> solve(
         string buffer(file_size, '\0');
         file.read(buffer.data(), file_size);
 
-        auto endReadingCSV = std::chrono::high_resolution_clock::now();
-        calculateTime(startReadingCSV, endReadingCSV, "Czas wczytywania danych");
+        // auto endReadingCSV = std::chrono::high_resolution_clock::now();
+        // calculateTime(startReadingCSV, endReadingCSV, "Czas wczytywania danych");
 
         size_t data_start = buffer.find('\n');
         if (data_start == string::npos) {
@@ -454,7 +454,7 @@ vector<Rule> solve(
         }
         data_start++;
         // Podział bufora na linie i przetwarzanie ich równolegle
-        auto start = std::chrono::high_resolution_clock::now();
+        // auto start = std::chrono::high_resolution_clock::now();
 
         int thread_count = omp_get_max_threads();
         vector<unordered_map<int, vector<string>>> local_maps(thread_count);
@@ -563,8 +563,8 @@ vector<Rule> solve(
             raw_transactions.push_back(std::move(items));
         }
 
-        auto end = std::chrono::high_resolution_clock::now();
-        calculateTime(start, end, "Czas przetwarzania danych i budowania struktury transakcji");  
+        // auto end = std::chrono::high_resolution_clock::now();
+        // calculateTime(start, end, "Czas przetwarzania danych i budowania struktury transakcji");  
 
     } catch (...) {
         raw_transactions.clear();
@@ -576,29 +576,29 @@ vector<Rule> solve(
     
     // Pomiar czasu liczenia wsparcia pojedynczych elementow
     unordered_map<string, int> item_counts;
-    {
-    auto start = std::chrono::high_resolution_clock::now();
+    // {
+    // auto start = std::chrono::high_resolution_clock::now();
     for (const auto& trans : raw_transactions) {
         for (const string& item : trans) {
             item_counts[item] += 1;
         }
     }
-    auto end = std::chrono::high_resolution_clock::now();
-    calculateTime(start, end, "Czas liczenia wsparcia pojedynczych elementow");
-    }
+    // auto end = std::chrono::high_resolution_clock::now();
+    // calculateTime(start, end, "Czas liczenia wsparcia pojedynczych elementow");
+    // }
     
     // Pomiar czasu filtrowania elementow niespelniajacych wsparcia
     unordered_map<string, int> frequent_items;
-    {
-    auto start = std::chrono::high_resolution_clock::now();
+    // {
+    // auto start = std::chrono::high_resolution_clock::now();
     for (const auto& entry : item_counts) {
         if (entry.second >= min_supp_count) {
             frequent_items[entry.first] = entry.second;
         }
     }
-    auto end = std::chrono::high_resolution_clock::now();
-    calculateTime(start, end, "Czas filtrowania elementow niespelniajacych wsparcia");
-    }
+    // auto end = std::chrono::high_resolution_clock::now();
+    // calculateTime(start, end, "Czas filtrowania elementow niespelniajacych wsparcia");
+    // }
 
     vector<string> sorted_items;
 
@@ -607,30 +607,30 @@ vector<Rule> solve(
     }
 
     // Pomiar czasu sortowania elementow wg wsparcia
-    {
-    auto start = std::chrono::high_resolution_clock::now();
+    // {
+    // auto start = std::chrono::high_resolution_clock::now();
     sort(sorted_items.begin(), sorted_items.end(),
          [&frequent_items](const string& a, const string& b) {
              return frequent_items[a] > frequent_items[b];
          });
-    auto end = std::chrono::high_resolution_clock::now();
-    calculateTime(start, end, "Czas sortowania elementow wedlug wsparcia");
-    }
+    // auto end = std::chrono::high_resolution_clock::now();
+    // calculateTime(start, end, "Czas sortowania elementow wedlug wsparcia");
+    // }
 
     FrequentItemsets frequent_itemsets;
     // Pomiar czasu generowania częstych itemsetów przez moduł biblioteczny
-    {
-    auto start = std::chrono::high_resolution_clock::now();
+    // {
+    // auto start = std::chrono::high_resolution_clock::now();
     frequent_itemsets = frequent_itemsets_library::generate(raw_transactions, min_supp_count);
-    auto end = std::chrono::high_resolution_clock::now();
-    calculateTime(start, end, "Czas generowania czestych itemsetow przez modul biblioteczny");
-    }
+    // auto end = std::chrono::high_resolution_clock::now();
+    // calculateTime(start, end, "Czas generowania czestych itemsetow przez modul biblioteczny");
+    // }
 
     vector<Rule> rules;
 
     // Pomiar czasu generowania reguł asocjacyjnych z częstych itemsetów
-    {
-    auto start = std::chrono::high_resolution_clock::now();
+    // {
+    // auto start = std::chrono::high_resolution_clock::now();
     for (const auto& entry : frequent_itemsets) {
         const Itemset& itemset = entry.first;
         int count = entry.second;
@@ -675,9 +675,9 @@ vector<Rule> solve(
             }
         }
     }
-    auto end = std::chrono::high_resolution_clock::now();
-    calculateTime(start, end, "Czas generowania regul asocjacyjnych z czestych itemsetow");
-    }
+    // auto end = std::chrono::high_resolution_clock::now();
+    // calculateTime(start, end, "Czas generowania regul asocjacyjnych z czestych itemsetow");
+    // }
 
     if (verbose) {
         cout << "Znaleziono " << rules.size() << " regul." << endl;
